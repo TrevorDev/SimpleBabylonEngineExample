@@ -1,0 +1,15 @@
+{
+  "name": "timelinepp",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "babylonjs": "^4.1.0-alpha.6",
+    "raf": "^3.4.1"
+  }
+}
