@@ -6,15 +6,54 @@ import { Engine } from '@babylonjs/core/Engines/engine';
 import { VertexBuffer } from '@babylonjs/core/Meshes/buffer';
 import { Effect } from '@babylonjs/core/Materials/effect';
 import { PostProcess } from '@babylonjs/core/PostProcesses/postProcess';
-import { Texture, Nullable } from "@babylonjs/core";
+import { Texture, Nullable, RenderTargetTexture, InternalTexture } from "@babylonjs/core";
 
-export class SinglePassBabylonRenderer {
-    public engine:Engine;
-    public effect:Nullable<Effect> = null;
+export class EffectRenderer {
+    quadBuffers = null;
+    public outputTexture:Nullable<Texture> = null
+    constructor(public engine:Engine, public effect: Effect){
+        this.quadBuffers = new FullScreenQuadBuffers(engine)
+    }
 
+    bind(){
+        // Reset state
+        this.engine.setViewport(new BABYLON.Viewport(0,0, 1, 1));
+        this.engine.enableEffect(this.effect);
+        this.engine.setState(false);
+        this.engine.setDepthBuffer(false);
+        this.engine.setDepthWrite(false);
+        
+        // Bind buffers
+        if(this.outputTexture){
+            this.engine.bindFramebuffer(this.outputTexture.getInternalTexture())
+        }
+        this.engine.bindBuffers(this.quadBuffers.vertexBuffers, this.quadBuffers.indexBuffer, this.effect);
+    }
+    render(){
+        this.engine.drawElementsType(Constants.MATERIAL_TriangleFillMode, 0, 6);
+        if(this.outputTexture){
+            this.engine.unBindFramebuffer(this.outputTexture.getInternalTexture())
+        }
+    }
+}
+
+export class FullScreenQuadBuffers {
+    private static vertices = [1, 1, -1, 1, -1, -1, 1, -1];
+    private static indices = [0, 1, 2, 0, 2, 3];
     private vertexBuffers = null;
     private indexBuffer = null;
-    private postProcess = null;
+
+    constructor(engine){
+        this.vertexBuffers = {
+            [VertexBuffer.PositionKind]: new VertexBuffer(engine, FullScreenQuadBuffers.vertices, VertexBuffer.PositionKind, false, false, 2),
+        };
+        this.indexBuffer = engine.createIndexBuffer(FullScreenQuadBuffers.indices);
+    }
+}
+
+export class SimpleEffect {
+
+    public static counter = 0;
 
     public static CreateTextureAsync(engine, url):Promise<Texture>{
         return new Promise((res, rej)=>{
@@ -30,64 +69,39 @@ export class SinglePassBabylonRenderer {
         })
     }
 
-    constructor(engine) {
-        this.engine = engine
+    public static CreateEffectAsync(name, options: {engine:Engine, fragmentShader: string, attributeNames:Array<string>, uniformNames:Array<string>, samplerNames:Array<string>}):Promise<Effect>{
+        return new Promise((res, rej)=>{
+            //TODO generate name
+            var shaderName = name+SimpleEffect.counter++;
+            console.log(shaderName)
+            Effect.ShadersStore[shaderName+"FragmentShader"] = options.fragmentShader
+            var effect:Effect = options.engine.createEffect({vertex: "postprocess", fragment: shaderName}, options.attributeNames, options.uniformNames, options.samplerNames, "", undefined)
+            if(effect.isReady){
+                res(effect)
+            }else{
+                effect.onCompiled = ()=>{
+                    res(effect)
+                }
+            }            
+        })
+        
     }
 
-    /**
-     * Creates a special pipeline for babylon.js
-     * As we are only compositing various textures and effects everything can be done in
-     * only one draw call per frame.
-     *
-     * We also do not need camera or meshes as we only render a full screen quad.
-     */
-    createRenderPipeline(settings: {fragmentShader: string, uniformNames: Array<string>, textureNames: Array<string>}) {
-        var shaderName = "compositing"
-        // Custom composition shader.
-        Effect.ShadersStore[shaderName+"FragmentShader"] = settings.fragmentShader
-
-        // Creates the post process attach to the shader
-        this.postProcess = new PostProcess(
-            shaderName,
-            shaderName,
-            settings.uniformNames,
-            settings.textureNames,
-            1,
-            null,
-            null,
-            this.engine,
-            false,
+    public static CreateRenderTargetFrameBuffer(engine:Engine){
+        var internalTexture = engine.createRenderTargetTexture(
+        {
+            width: Math.floor(engine.getRenderWidth(true) / 1),
+            height: Math.floor(engine.getRenderHeight(true) / 1),
+        },
+        {
+            generateDepthBuffer: false,
+            generateStencilBuffer: false,
+            generateMipMaps: false,
+            samplingMode: Constants.TEXTURE_NEAREST_NEAREST,
+        },
         );
-
-        this.effect = this.postProcess.apply();
-
-        // Creates buffers to render directly without camera
-        const vertices = [1, 1, -1, 1, -1, -1, 1, -1];
-        const indices = [0, 1, 2, 0, 2, 3];
-        this.vertexBuffers = {
-            [VertexBuffer.PositionKind]: new VertexBuffer(this.engine, vertices, VertexBuffer.PositionKind, false, false, 2),
-        };
-        this.indexBuffer = this.engine.createIndexBuffer(indices);
-        this.engine.bindBuffers(this.vertexBuffers, this.indexBuffer, this.effect);
-    }
-
-    render(){
-        this.resetViewPort();
-        this.postProcess.apply();
-        this.engine.drawElementsType(Constants.MATERIAL_TriangleFillMode, 0, 6);
-    }
-
-    /**
-     * Resets the viewport on the engine to ensure it matches the canvas size
-     */
-    resetViewPort() {
-        this.engine.setViewport(new BABYLON.Viewport(0,0, 1, 1));
-    }
-
-    dispose(){
-        if (this.postProcess) this.postProcess.dispose();
-        if (this.effect) this.effect.dispose();
-        if (this.vertexBuffers) this.vertexBuffers[VertexBuffer.PositionKind].dispose();
-        if (this.indexBuffer) this.engine._releaseBuffer(this.indexBuffer);
+        var customTexture = new Texture("", null);
+        customTexture._texture = internalTexture
+        return customTexture
     }
 }
