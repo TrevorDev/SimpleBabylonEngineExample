@@ -1,7 +1,6 @@
-import * as BABYLON from "@babylonjs/core"
 import { Engine } from '@babylonjs/core/Engines/engine';
-import { SimpleEffect, EffectRenderer } from "./renderer";
-import { Effect, Constants } from "@babylonjs/core";
+import { EffectCreationTools, EffectRenderer, ChainEffectRenderer } from "./renderer";
+import { Vector2 } from "@babylonjs/core";
 
 var main = async ()=>{
     var canvas = document.getElementById("testCanvas") as HTMLCanvasElement;
@@ -15,77 +14,91 @@ var main = async ()=>{
     });
 
     // Create first effect
-    var effect = await SimpleEffect.CreateEffectAsync("OffsetImage",
+    var renderImageEffect = await EffectCreationTools.CreateEffectAsync("OffsetImage",
         {
             engine: engine,
             fragmentShader: `
                 #extension GL_OES_standard_derivatives : enable
         
                 varying vec2 vUV;
-                uniform sampler2D textureSamplerVideo;
+                uniform sampler2D inputImage;
                 uniform vec2 offset;
                 void main(void) {
                     vec2 coords = vUV;
                     coords.x += offset.x;
-                    vec3 video = texture2D(textureSamplerVideo, coords).rgb;
+                    vec3 video = texture2D(inputImage, coords).rgb;
         
                     gl_FragColor = vec4(video, 1.0);
                 }
             `,
+            // Position and scale are required for the vertex shader
             attributeNames: ["position"],
             uniformNames: ["scale", "offset"],
-            samplerNames: ["textureSamplerVideo"]
+            samplerNames: ["inputImage"]
         }
     )
-    var customTexture = await SimpleEffect.CreateTextureAsync(engine,"https://picsum.photos/id/1035/200/200")
-    var customTexture2 = await SimpleEffect.CreateTextureAsync(engine,"https://picsum.photos/id/1045/200/200")
-    var offset = new BABYLON.Vector2(0.5, 0)
+    // var customTexture2 = await EffectCreationTools.CreateTextureAsync(engine,"https://picsum.photos/id/1035/200/200")
+    var customTexture = await EffectCreationTools.CreateTextureAsync(engine,"https://picsum.photos/id/1045/200/200")
+    var offset = new Vector2(0.5, 0)
     document.onwheel = (e)=>{
         offset.x += e.deltaY/1000
     }
-    var s = new BABYLON.Vector2(1,1)
-    var r = new EffectRenderer(engine, effect)
+    var s = new Vector2(1,1)
+    var renderImage = new EffectRenderer(engine, renderImageEffect)
+    renderImage.onApplyObservable.add(()=>{
+        renderImageEffect.setTexture('inputImage', customTexture);
+        renderImageEffect.setVector2("offset", offset)
+        renderImageEffect.setVector2("scale", s);
+    })
     
 
     // Create second effect
-    var effect2 = await SimpleEffect.CreateEffectAsync("makeRed",
+    var makeRedEffect = await EffectCreationTools.CreateEffectAsync("makeRed",
         {
             engine: engine,
             fragmentShader: `
                 #extension GL_OES_standard_derivatives : enable
             
                 varying vec2 vUV;
-                uniform sampler2D textureSamplerVideo;
+                uniform sampler2D textureSampler;
                 uniform vec2 offset;
                 void main(void) {
-                    vec3 video = texture2D(textureSamplerVideo, vUV).rgb;
-                    video.r = 1.0;
-                    gl_FragColor = vec4(video, 1.0);
+                    vec3 inputTexture = texture2D(textureSampler, vUV).rgb;
+                    inputTexture.r = 1.0;
+                    gl_FragColor = vec4(inputTexture, 1.0);
                 }
             `,
             attributeNames: ["position"],
             uniformNames: ["scale"],
-            samplerNames: ["textureSamplerVideo"]
+            samplerNames: ["textureSampler"]
         }
     )
-    var r2 = new EffectRenderer(engine, effect2)
+    var makeRed = new EffectRenderer(engine, makeRedEffect)
+    makeRed.onApplyObservable.add(()=>{
+        // This will be set by the ChainEffectRenderer
+        //  makeRedEffect.setTexture('textureSampler', customTexture2);
+        makeRedEffect.setVector2("offset", offset)
+        makeRedEffect.setVector2("scale", s);
+    })    
+
+    // Create an effect chain to render effects in order
+    var renderer = new ChainEffectRenderer(engine);
+    renderer.effects = [renderImage, makeRed]
+
+    // on key press remove an effect
+    document.onkeydown = ()=>{
+        if(renderer.effects.length == 1){
+            renderer.effects = [renderImage, makeRed]
+        }else{
+            renderer.effects = [renderImage]
+        }
+    }
 
     // Render loop
-    var tempScreenBuffer = SimpleEffect.CreateRenderTargetFrameBuffer(engine)
+    renderer.render()
     var loop = ()=>{
         window.requestAnimationFrame(()=>{
-            r.outputTexture = tempScreenBuffer
-           
-            r.bind()
-            effect.setTexture('textureSamplerVideo', customTexture2);
-            effect.setVector2("offset", offset)
-            effect.setVector2("scale", s);
-            r.render()
-            r2.bind()
-            effect2.setTexture('textureSamplerVideo', tempScreenBuffer);
-            effect2.setVector2("offset", offset)
-            effect2.setVector2("scale", s);
-            r2.render()
+            renderer.render()
             loop()
         })
     }
